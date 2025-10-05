@@ -15,7 +15,7 @@ where table_name = 'cornproduction' and
 #rename columns becauuse our columns get on 1/2 rows instant of header
 alter table cornproduction 
 rename column `Crop: Maize` to `Sr_NO`;
-alter table cornproduction 
+alter table cornproductionn 
 RENAME column MyUnknownColumn TO State ,
 rename column `MyUnknownColumn_[0]` to District , 
 rename column `MyUnknownColumn_[1]` to `Production(T)`;
@@ -190,6 +190,7 @@ where table_name = "rate2021" and
  #Reduce Cost 
 #- FR01. Display average, min, max production by district & state
    # BY State 
+   create view AverageProduction as
    select State , min(`Production(T)`) as Min_Production , max(`Production(T)`) as Max_Production 
    ,avg(`Production(T)`) as Avg_Production from cornproductionn 
    group by State ;
@@ -252,14 +253,14 @@ WHERE r20.State = 'Maharashtra'
 
 #-FR05. Try to avoid that district where rate always on top over the year and production near minimun of state or below that avg of state 
 
-WITH max_rate_2020 AS (
     SELECT MAX(`Market-Price(in Rupees Per Quintal)`) AS max_rate
     FROM rate2020
     WHERE State = 'Maharashtra'
-),
+;
 max_rate_2021 AS (
     SELECT MAX(`Market-Price(in Rupees Per Quintal)`) AS max_rate
-    FROM rate2021
+    FROM rate2021WITH max_rate_2020 AS (
+
     WHERE State = 'Maharashtra'
 ),
 max_rate_2022 AS (
@@ -303,13 +304,378 @@ SELECT * FROM qualified_districts;
      PlESSTHAN22 AS ( SELECT State from rate2022
      where `Market-Price(in Rupees Per Quintal)` > ( select avg(`Market-Price(in Rupees Per Quintal)`) from rate2022)) 
 #- FR08. State where average price always less than national average price for all 3 year 
+   WITH combined_rates AS (
+    SELECT State, Year, `Market-Price(in Rupees Per Quintal)` AS MarketPrice
+    FROM rate2020
+    UNION ALL
+    SELECT State, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2021
+    UNION ALL
+    SELECT State, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2022
+),
+national_avg AS (
+    SELECT Year, AVG(MarketPrice) AS NationalAvg
+    FROM combined_rates
+    GROUP BY Year
+),
+state_avg AS (
+    SELECT State, Year, AVG(MarketPrice) AS StateAvg
+    FROM combined_rates
+    GROUP BY State, Year
+),
+comparison AS (
+    SELECT 
+        s.State, 
+        s.Year
+    FROM state_avg s
+    JOIN national_avg n ON s.Year = n.Year
+    WHERE s.StateAvg < n.NationalAvg
+)
+SELECT State
+FROM comparison
+GROUP BY State
+HAVING COUNT(DISTINCT Year) = 3;
 
-#- FR09. Identify state where production high and in that state identify which district on top for give high production for all 3 years top 10
+#-FR09. Identify state where production high and in that state identify which district on top for give high production for all 3 years top 10
+WITH state_totals AS (
+    SELECT State, SUM(`Production(T)`) AS TotalProd
+    FROM cornproductionn
+    GROUP BY State
+    ORDER BY TotalProd DESC
+    LIMIT 3  -- pick top 3 states
+),
+ranked_districts AS (
+    SELECT 
+        cp.State,
+        cp.District,
+        cp.Year,
+        cp.`Production(T)`,
+        RANK() OVER (PARTITION BY cp.Year ORDER BY cp.`Production(T)` DESC) AS prod_rank
+    FROM cornproductionn cp
+    JOIN state_totals st ON cp.State = st.State
+)
+SELECT *
+FROM ranked_districts
+WHERE prod_rank <= 10
+ORDER BY Year, prod_rank;
+
 #-FR10. Identify which district gives maximun production for all 3 year all over india
+WITH ranked_production AS (
+    SELECT 
+        District,
+        State,
+        Year,
+        `Production(T)`,
+        RANK() OVER (PARTITION BY Year ORDER BY `Production(T)` DESC) AS prod_rank
+    FROM cornproductionn
+)
+SELECT *
+FROM ranked_production
+WHERE prod_rank = 1;
+
 #-FR11. District where avg production always on more than nationonal average for 3 year
-#-FR12. State where avg rate always more than national avgerage rate for all 3 year 
-#-FR13. Identify state which have more than national avgerage rate for all 3 year , and in that state which district are on top regarding rate
+WITH national_avg AS (
+    SELECT 
+        Year, 
+        AVG(`Production(T)`) AS NationalAvg
+    FROM cornproductionn
+    GROUP BY Year
+),
+district_avg AS (
+    SELECT 
+        District, 
+        State,
+        Year, 
+        AVG(`Production(T)`) AS DistrictAvg
+    FROM cornproductionn
+    GROUP BY State, District, Year
+),
+comparison AS (
+    SELECT 
+        d.State,
+        d.District,
+        d.Year
+    FROM district_avg d
+    JOIN national_avg n 
+      ON d.Year = n.Year
+    WHERE d.DistrictAvg > n.NationalAvg
+)
+SELECT 
+    State,
+    District
+FROM comparison
+GROUP BY State, District
+HAVING COUNT(DISTINCT Year) = 3;
+
+#-FR12. 
+ 
+WITH national_avg AS (
+    SELECT 
+        Year, 
+        AVG(`Production(T)`) AS NationalAvg
+    FROM cornproductionn
+    GROUP BY Year
+),
+district_avg AS (
+    SELECT 
+        District, 
+        State,
+        Year, 
+        AVG(`Production(T)`) AS DistrictAvg
+    FROM cornproductionn
+    GROUP BY State, District, Year
+),
+comparison AS (
+    SELECT 
+        d.State,
+        d.District,
+        d.Year
+    FROM district_avg d
+    JOIN national_avg n 
+      ON d.Year = n.Year
+    WHERE d.DistrictAvg > n.NationalAvg
+)
+SELECT 
+    State,
+    District
+FROM comparison
+GROUP BY State, District
+HAVING COUNT(DISTINCT Year) = 3;
+
+#-FR13. Identify state which have more than national avgerage rate for all 3 year,and in that state which district are on top regarding rate
+  # Combine all rate tables into one
+  WITH combined_rates AS (
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)` AS Rate
+    FROM rate2020
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2021
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2022
+),
+ #Calculate national average rate per year
+  national_avg AS (
+    SELECT Year, AVG(Rate) AS NationalRate
+    FROM combined_rates
+    GROUP BY Year
+),
+# Calculate state average rate per year
+  state_avg AS (
+    SELECT State, Year, AVG(Rate) AS StateRate
+    FROM combined_rates
+    GROUP BY State, Year
+),
+# Filter states where state average > national average in all 3 years
+  above_national_states AS (
+    SELECT sa.State
+    FROM state_avg sa
+    JOIN national_avg na ON sa.Year = na.Year
+    WHERE sa.StateRate > na.NationalRate
+    GROUP BY sa.State
+    HAVING COUNT(DISTINCT sa.Year) = 3
+),
+#  Within those states, find top districts by average rate across 3 years
+  district_avg_rate AS (
+    SELECT State, District, AVG(Rate) AS AvgRate
+    FROM combined_rates
+    WHERE State IN (SELECT State FROM above_national_states)
+    GROUP BY State, District
+),
+ranked_districts AS (
+    SELECT *,
+           RANK() OVER (PARTITION BY State ORDER BY AvgRate DESC) AS rank_in_state
+    FROM district_avg_rate
+)
+SELECT *
+FROM ranked_districts
+WHERE rank_in_state = 1;
+
 #-FR14. District which average rate more than national average rate for all 3 year  
+WITH combined_rates AS (
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)` AS Rate
+    FROM rate2020
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2021
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2022
+),
+national_avg AS (
+    SELECT Year, AVG(Rate) AS NationalRate
+    FROM combined_rates
+    GROUP BY Year
+),
+district_avg AS (
+    SELECT State, District, Year, AVG(Rate) AS DistrictRate
+    FROM combined_rates
+    GROUP BY State, District, Year
+),
+comparison AS (
+    SELECT 
+        d.State,
+        d.District,
+        d.Year
+    FROM district_avg d
+    JOIN national_avg n ON d.Year = n.Year
+    WHERE d.DistrictRate > n.NationalRate
+)
+SELECT 
+    State,
+    District
+FROM comparison
+GROUP BY State, District
+HAVING COUNT(DISTINCT Year) = 3;
+
 #-FR15. District of MP where maximun production & less than national average rate
+WITH combined_rates AS (
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)` AS Rate
+    FROM rate2020
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2021
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2022
+),
+national_avg_rate AS (
+    SELECT Year, AVG(Rate) AS NationalAvgRate
+    FROM combined_rates
+    GROUP BY Year
+),
+district_avg_rate AS (
+    SELECT State, District, Year, AVG(Rate) AS DistrictRate
+    FROM combined_rates
+    WHERE State = 'Madhya Pradesh'
+    GROUP BY State, District, Year
+),
+below_avg_districts AS (
+    SELECT d.State, d.District
+    FROM district_avg_rate d
+    JOIN national_avg_rate n ON d.Year = n.Year
+    WHERE d.DistrictRate < n.NationalAvgRate
+    GROUP BY d.State, d.District
+    HAVING COUNT(DISTINCT d.Year) = 3
+),
+mp_production AS (
+    SELECT State, District, SUM(`Production(T)`) AS TotalProduction
+    FROM cornproductionn
+    WHERE State = 'Madhya Pradesh'
+    GROUP BY State, District
+),
+final AS (
+    SELECT p.State, p.District, p.TotalProduction
+    FROM mp_production p
+    JOIN below_avg_districts b ON p.State = b.State AND p.District = b.District
+)
+SELECT *
+FROM final
+ORDER BY TotalProduction DESC
+LIMIT 1;
+
 #-FR16. District of Gujrat where maximun production & less than national average rate
+WITH combined_rates AS (
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)` AS Rate
+    FROM rate2020
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2021
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2022
+),
+-- National average rate per year
+national_avg_rate AS (
+    SELECT Year, AVG(Rate) AS NationalAvgRate
+    FROM combined_rates
+    GROUP BY Year
+),
+-- District-level average rate per year (for Gujarat only)
+district_avg_rate AS (
+    SELECT State, District, Year, AVG(Rate) AS DistrictRate
+    FROM combined_rates
+    WHERE State = 'Gujarat'
+    GROUP BY State, District, Year
+),
+-- Districts in Gujarat where rate is less than national average in all 3 years
+below_avg_districts AS (
+    SELECT d.State, d.District
+    FROM district_avg_rate d
+    JOIN national_avg_rate n ON d.Year = n.Year
+    WHERE d.DistrictRate < n.NationalAvgRate
+    GROUP BY d.State, d.District
+    HAVING COUNT(DISTINCT d.Year) = 3
+),
+-- Total production per district (Gujarat only)
+gujarat_production AS (
+    SELECT State, District, SUM(`Production(T)`) AS TotalProduction
+    FROM cornproductionn
+    WHERE State = 'Gujarat'
+    GROUP BY State, District
+),
+-- Join: districts with low rate + production
+final AS (
+    SELECT p.State, p.District, p.TotalProduction
+    FROM gujarat_production p
+    JOIN below_avg_districts b ON p.State = b.State AND p.District = b.District
+)
+-- Get the district with maximum production
+SELECT *
+FROM final
+ORDER BY TotalProduction DESC
+LIMIT 1;
+
 #-FR17. District of Karnatka where maximun production & less than national average rate
+WITH combined_rates AS (
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)` AS Rate
+    FROM rate2020
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2021
+    UNION ALL
+    SELECT State, District, Year, `Market-Price(in Rupees Per Quintal)`
+    FROM rate2022
+),
+-- National average rate per year
+national_avg_rate AS (
+    SELECT Year, AVG(Rate) AS NationalAvgRate
+    FROM combined_rates
+    GROUP BY Year
+),
+-- District-level average rate per year (Karnataka only)
+district_avg_rate AS (
+    SELECT State, District, Year, AVG(Rate) AS DistrictRate
+    FROM combined_rates
+    WHERE State = 'Karnataka'
+    GROUP BY State, District, Year
+),
+-- Districts in Karnataka where rate < national average for all 3 years
+below_avg_districts AS (
+    SELECT d.State, d.District
+    FROM district_avg_rate d
+    JOIN national_avg_rate n ON d.Year = n.Year
+    WHERE d.DistrictRate < n.NationalAvgRate
+    GROUP BY d.State, d.District
+    HAVING COUNT(DISTINCT d.Year) = 3
+),
+-- Total production per district (Karnataka only)
+karnataka_production AS (
+    SELECT State, District, SUM(`Production(T)`) AS TotalProduction
+    FROM cornproductionn
+    WHERE State = 'Karnataka'
+    GROUP BY State, District
+),
+-- Final join: only those districts with low rate and highest production
+final AS (
+    SELECT p.State, p.District, p.TotalProduction
+    FROM karnataka_production p
+    JOIN below_avg_districts b 
+      ON p.State = b.State AND p.District = b.District
+)
+-- Output the top 1 district by production
+SELECT *
+FROM final
+ORDER BY TotalProduction DESC
+LIMIT 1;
